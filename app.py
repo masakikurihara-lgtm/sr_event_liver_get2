@@ -1,7 +1,7 @@
 import streamlit as st
 import requests
 import pandas as pd
-from io import BytesIO
+from io import BytesIO, StringIO # <-- ここを修正
 import re
 import time
 
