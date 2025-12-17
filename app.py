@@ -1,7 +1,7 @@
 import streamlit as st
 import requests
 import pandas as pd
-from io import BytesIO, StringIO # <-- ここを修正
+from io import BytesIO, StringIO 
 import re
 import time
 
@@ -94,6 +94,7 @@ def fetch_organizer_list(url):
         response.raise_for_status()
         
         # CSVデータをStringIOで読み込む
+        # CSVは通常、UTF-8で提供されると仮定
         csv_data = StringIO(response.content.decode('utf-8'))
         
         # 1行目をヘッダーとして読み込み、2列を文字列として取得
@@ -102,6 +103,7 @@ def fetch_organizer_list(url):
         # 辞書を作成 {オーガナイザーID: オーガナイザー名}
         # 列名が日本語なので、存在チェック
         if len(df.columns) >= 2:
+            # 1列目がID、2列目が名前として使用
             organizer_map = pd.Series(df.iloc[:, 1].values, index=df.iloc[:, 0]).to_dict()
             st.success(f"オーガナイザーリストを正常に取得しました。**{len(organizer_map)}** 件")
             return organizer_map
@@ -204,12 +206,17 @@ def main():
         st.success(f"重複排除・ソート後、**{len(final_df)}** 件のユニークなルーム情報が確定しました。")
         
         # --- 5. CSVダウンロード機能 ---
-        # DataFrameをCSVバイトデータに変換（ヘッダーなし、インデックスなしの要件を維持）
-        csv_data = final_df.to_csv(index=False, header=False, encoding='utf-8')
+        # DataFrameをCSV文字列（UTF-8）に変換（ヘッダーなし）
+        # NOTE: Windows環境で文字化けしないよう、Shift_JIS (CP932) に変換する
+        csv_string_utf8 = final_df.to_csv(index=False, header=False, encoding='utf-8')
+        
+        # 文字列をCP932（Shift_JIS）バイトデータに変換
+        # BOM付きUTF-8も選択肢だが、汎用的なShift_JIS系で対応
+        csv_data_cp932 = csv_string_utf8.encode('cp932', 'ignore') 
         
         st.download_button(
             label="⬇️ 結果をCSVファイルとしてダウンロード",
-            data=csv_data.encode('utf-8'),
+            data=csv_data_cp932, # CP932バイトデータを渡す
             file_name='showroom_event_liver_info.csv', # ファイル名を更新
             mime='text/csv',
             key='download-csv'
