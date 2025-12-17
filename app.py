@@ -1,23 +1,22 @@
 import streamlit as st
 import requests
 import pandas as pd
-# from ftplib import FTP # 削除
-from io import BytesIO # BytesIOは後続のCSVダウンロードボタンのために残します
+from io import BytesIO
 import re
 import time
 
 # --- 定数設定 ---
 # APIのエンドポイント
 API_URL = "https://www.showroom-live.com/api/event/room_list"
-# FTPアップロード先のファイル名とパス (削除)
-# FTP_FILE_PATH = "/mksoul-pro.com/showroom/file/event_liver_list.csv"
+# オーガナイザーリストのURL
+ORGANIZER_LIST_URL = "https://mksoul-pro.com/showroom/file/organizer_list.csv"
 
 # --- 関数: APIから全ページデータを取得 ---
 @st.cache_data(show_spinner="イベント参加ルーム情報を取得中...")
 def fetch_all_room_data(event_id):
     """
     指定されたイベントIDの全ページからルーム情報を取得し、
-    ルームIDとイベントIDのリストを返します。
+    ルームID、イベントID、ルーム名、オーガナイザーIDのリストを返します。
     """
     st.write(f"イベントID: **{event_id}** の情報を取得します。")
     all_rooms = []
@@ -42,20 +41,23 @@ def fetch_all_room_data(event_id):
                 st.info(f"ページ {page}: ルームが見つかりませんでした。全 {page-1} ページを処理しました。")
                 break
 
-            # データを処理して、ルームIDとイベントIDのペアを抽出
+            # データを処理して、必要な情報を抽出 (room_id, event_id, organizer_id, room_name)
             for room_data in room_list:
-                # room_idはトップレベルまたはevent_entryネスト内にあります。
-                # どちらも同じ情報であるため、トップレベルのものを採用します。
                 room_id = room_data.get("room_id")
+                room_name = room_data.get("room_name", "") # ルーム名
+                organizer_id = room_data.get("organizer_id", 0) # オーガナイザーID
+                
                 # event_entryネスト内のevent_idを取得
                 entry_data = room_data.get("event_entry", {})
                 current_event_id = entry_data.get("event_id")
 
                 if room_id and current_event_id:
-                    # room_idは文字列型と数値型が混在している可能性があるため、文字列に統一
+                    # 全て文字列に統一
                     all_rooms.append({
                         "room_id": str(room_id),
-                        "event_id": str(current_event_id)
+                        "event_id": str(current_event_id),
+                        "room_name": str(room_name),
+                        "organizer_id": str(organizer_id),
                     })
             
             # APIのレスポンスから次のページ番号を取得
@@ -79,20 +81,48 @@ def fetch_all_room_data(event_id):
 
     return all_rooms
 
-# --- 関数: FTPからファイルをダウンロード (削除) ---
-# def download_ftp_file(ftp, remote_path):
-#     """FTPサーバーから既存のCSVファイルをダウンロードし、Pandas DataFrameとして返します。"""
-#     ... (削除)
+# --- 関数: オーガナイザーリストを取得し、ID-Nameの辞書を作成 ---
+@st.cache_data(show_spinner="オーガナイザーリストを取得中...")
+def fetch_organizer_list(url):
+    """
+    指定されたURLからCSVファイルをダウンロードし、オーガナイザーIDをキー、
+    オーガナイザー名を値とする辞書を返します。
+    """
+    st.info(f"オーガナイザーリストを **{url}** から取得します。")
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        
+        # CSVデータをStringIOで読み込む
+        csv_data = StringIO(response.content.decode('utf-8'))
+        
+        # 1行目をヘッダーとして読み込み、2列を文字列として取得
+        df = pd.read_csv(csv_data, header=0, dtype=str)
+        
+        # 辞書を作成 {オーガナイザーID: オーガナイザー名}
+        # 列名が日本語なので、存在チェック
+        if len(df.columns) >= 2:
+            organizer_map = pd.Series(df.iloc[:, 1].values, index=df.iloc[:, 0]).to_dict()
+            st.success(f"オーガナイザーリストを正常に取得しました。**{len(organizer_map)}** 件")
+            return organizer_map
+        else:
+            st.error("オーガナイザーリストのCSVファイルにIDと名前の列が見つかりません。")
+            return {}
 
-# --- 関数: DataFrameをFTPにアップロード (削除) ---
-# def upload_ftp_file(ftp, df, remote_path):
-#     """DataFrameをCSV形式でFTPサーバーにアップロードします。（バイトデータとして転送）"""
-#     ... (削除)
+    except requests.exceptions.RequestException as e:
+        st.error(f"オーガナイザーリストのダウンロード中にエラーが発生しました: {e}")
+        return {}
+    except Exception as e:
+        st.error(f"オーガナイザーリストの処理中に予期せぬエラーが発生しました: {e}")
+        return {}
 
 # --- メイン Streamlit アプリケーション ---
 def main():
-    st.title("SHOWROOM イベント参加ルームID 抽出ツール")
+    st.title("SHOWROOM イベント参加ルーム情報 抽出ツール")
     st.markdown("---")
+
+    # --- 0. オーガナイザーリストの取得 ---
+    organizer_map = fetch_organizer_list(ORGANIZER_LIST_URL)
     
     # --- 1. イベントID入力 ---
     event_ids_input = st.text_area(
@@ -116,7 +146,7 @@ def main():
     st.markdown("---")
 
     # --- 2. 実行ボタン ---
-    if st.button("🚀 実行: ルームIDを取得"):
+    if st.button("🚀 実行: ルーム情報を取得"):
         
         # 全イベントのデータ取得
         new_data_list = []
@@ -131,55 +161,56 @@ def main():
             
         # 取得データをDataFrameに変換
         new_df = pd.DataFrame(new_data_list, dtype=str)
-        # 列の順番を要件通りに [room_id, event_id] に設定
-        new_df = new_df[['room_id', 'event_id']]
-        st.subheader("✅ 取得した新規データ")
-        st.dataframe(new_df)
-        st.success(f"全イベントから合計 **{len(new_df)}** 件のルームIDを取得しました。")
         
-        # --- 3. データ処理と重複排除 ---
-        st.markdown("---")
-        st.header("🔄 データ結合・重複排除・結果表示")
-        
-        # ここでは既存ファイルがないため、new_df自体が最終データとなる（結合処理が不要）
-        
+        # --- 3. オーガナイザー名マッピング処理 ---
+        st.subheader("🔗 オーガナイザー名のマッピング")
+        if organizer_map:
+            # organizer_idに基づいてorganizer_nameをマッピング
+            # マッチしない場合はNaNになるため、fillna('')でブランクに変換
+            new_df['organizer_name'] = new_df['organizer_id'].map(organizer_map).fillna('')
+            st.success("オーガナイザー名のマッピングを完了しました。")
+        else:
+            new_df['organizer_name'] = ''
+            st.warning("オーガナイザーリストが取得できなかったため、オーガナイザー名はブランクのままです。")
+
         # --- 4. 重複処理ロジック ---
-        # 結合処理がなくなったため、取得したnew_df内での重複排除を行う。
-        # ただし、fetch_all_room_dataの性質上、通常はnew_df内に同一room_idの重複はないが、
-        # 複数のevent_idが入力された場合に備え、room_idとevent_idのセットで重複を排除する
-        # (ここでは既存のロジックに近くなるように、room_idをキーにevent_id_numが新しいものを残すロジックを採用する)
-        
-        final_df = new_df.copy() # 新規データのみを処理対象とする
-        
+        st.markdown("---")
+        st.header("🔄 重複排除・ソート")
+
+        final_df = new_df.copy()
+
         # 1. event_idを数値に変換（比較のため）
         final_df['event_id_num'] = pd.to_numeric(final_df['event_id'], errors='coerce')
         
         # 2. room_idでグルーピングし、event_id_numの最大値（新しいもの）を持つ行を選択
-        #    - room_idが同じ場合は、event_idが大きい方（新しいイベント）のエントリを残す。
         final_df = final_df.loc[
             final_df.groupby('room_id')['event_id_num'].idxmax()
         ]
         
-        # 3. 作業用列を削除し、最終的な形式に整える
-        final_df = final_df[['room_id', 'event_id']]
+        # 3. 作業用列を削除し、最終的な列の順番を設定
+        final_df = final_df.drop(columns=['event_id_num'])
         
         # 💡 修正箇所: room_idを数値に変換してからソートする
         final_df['room_id_num'] = pd.to_numeric(final_df['room_id'], errors='coerce')
         final_df = final_df.sort_values(by='room_id_num', ascending=True)
         final_df = final_df.drop(columns=['room_id_num']) # 作業用列を削除
 
+        # 最終的な出力列の順番
+        OUTPUT_COLUMNS = ['room_id', 'event_id', 'room_name', 'organizer_id', 'organizer_name']
+        final_df = final_df[OUTPUT_COLUMNS]
+
         st.subheader("📊 最終的な結果データ（重複排除・ソート後）")
         st.dataframe(final_df)
-        st.success(f"重複排除・ソート後、**{len(final_df)}** 件のユニークなルームIDが確定しました。")
+        st.success(f"重複排除・ソート後、**{len(final_df)}** 件のユニークなルーム情報が確定しました。")
         
-        # --- 5. CSVダウンロード機能を追加 ---
-        # DataFrameをCSVバイトデータに変換
+        # --- 5. CSVダウンロード機能 ---
+        # DataFrameをCSVバイトデータに変換（ヘッダーなし、インデックスなしの要件を維持）
         csv_data = final_df.to_csv(index=False, header=False, encoding='utf-8')
         
         st.download_button(
             label="⬇️ 結果をCSVファイルとしてダウンロード",
             data=csv_data.encode('utf-8'),
-            file_name='showroom_event_liver_list.csv',
+            file_name='showroom_event_liver_info.csv', # ファイル名を更新
             mime='text/csv',
             key='download-csv'
         )
